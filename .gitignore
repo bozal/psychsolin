@@ -1,3 +1,11 @@
+# compiled firmwares
+patch/bin
+*.bin
+
+# source code
+*.h
+*.c
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
