@@ -1,6 +1,9 @@
 # compiled firmwares
 patch/bin
+firmware/bin
 *.bin
+*.hex
+templates/
 
 # source code
 *.h
