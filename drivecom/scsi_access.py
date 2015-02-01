@@ -3,10 +3,12 @@
 
 import subprocess
 import logging
+import re
 
 class SCSIException(Exception):
     pass
 
+# WARNING:vulnerable to shell command injection via device 
 def execute_scsi_command(device, cmd, data_out=None, len_in=0):
     args = ["sg_raw", "-b"]
     
@@ -42,3 +44,6 @@ def execute_scsi_command(device, cmd, data_out=None, len_in=0):
     
     return bytearray(data_in)
     
+def verify_device_path(device_path):
+    res = re.match(r"^/dev/sd\w/?$", device_path)
+    return res is not None

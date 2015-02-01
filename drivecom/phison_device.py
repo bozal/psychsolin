@@ -3,7 +3,7 @@
 
 import time
 import logging
-from .scsi_access import execute_scsi_command
+from scsi_access import execute_scsi_command, verify_device_path
 
 MODE_NAMES = ["BootMode", "Burner", "HardwareVerify", "Firmware"]
 WAIT_TIME_MS = 2000
@@ -159,8 +159,10 @@ class PhisonCmd(object):
 class PhisonDevice(object):
     
     def __init__(self, device):
-        self._device = device
         self._logger = logging.getLogger("drivecom.phison_device.PhisonDevice")
+        if not verify_device_path(device):
+            raise PhisonDeviceException("'%s' is not a valid device" % device)
+        self._device = device
     
     def get_info(self):
         ret = {
