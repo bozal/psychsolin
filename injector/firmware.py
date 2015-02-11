@@ -86,8 +86,10 @@ class Patterns(object):
 class Firmware(object):
     def __init__(self):
         self._reset()
-        self._sections.append(bytearray([0]*BASE_LENGTH))
+        self._sections.append(Section(BASE_LENGTH))
         self._logger = logging.getLogger("injector.firmware.Firmware")
+        self._patch_dict = {}
+        self._generate_patch_dict()
     
     def _reset(self):
         self._filename = None
@@ -96,6 +98,7 @@ class Firmware(object):
         # e.g. [base, section_0, section_1, section_2]
         self._sections = []
         self._footer = None
+        self._offpage_stubs = {}
     
     def load_from_file(self, filename):
         self._reset()
@@ -104,32 +107,32 @@ class Firmware(object):
         filesize = os.path.getsize(filename)
         with open(filename, "rb") as firmware_file:
             # read header
-            self._header = bytearray(firmware_file.read(HEADER_LENGTH))
+            self._header = Section(HEADER_LENGTH, firmware_file)
             
             # read base
-            self._sections.append(bytearray(firmware_file.read(BASE_LENGTH)))
+            self._sections.append(Section(BASE_LENGTH, firmware_file))
             
             # read sections
             while (filesize - firmware_file.tell()) > FOOTER_LENGTH:
-                new_section = bytearray(firmware_file.read(SECTION_LENGTH))
+                new_section = Section(SECTION_LENGTH, firmware_file)
                 self._sections.append(new_section)
             
             # read footer
             if (filesize - firmware_file.tell()) == FOOTER_LENGTH:
-                self._footer = bytearray(firmware_file.read(FOOTER_LENGTH))
+                self._footer = Section(FOOTER_LENGTH, firmware_file)
             
             self._logger.info("%i bytes remain", 
                 (filesize - firmware_file.tell()))
     
     def save(self, filename):
         with open(filename, "wb") as firmware_file:
-            firmware_file.write(self._header)
+            self._header.write_to_file(firmware_file)
             
             for section in self._sections:
-                firmware_file.write(section)
+                section.write_to_file(firmware_file)
             
             if self._footer is not None:
-                firmware_file.write(self._footer)
+                self._footer.write_to_file(firmware_file)
     
     def save_separate(self, filename):
         # save header
@@ -172,31 +175,19 @@ class Firmware(object):
         # multiple sections always in the first section it occures
         
         for index in xrange(len(self._sections)):
-            res = regex.search(self._sections[index], offset)
+            res = self._sections[index].search(regex, offset)
             if res is not None:
                 return (index, res.start(0))
         
         return None
     
-    def find_last_free_chunk(self, section_index):
-        ret = -1
-        
-        if section_index < len(self._sections):
-            data = self._sections[section_index]
-            repeating = data[-1]
-            ret = len(data) - 2
-            
-            while data[ret] == repeating:
-                ret -= 1
-                if ret < 0:
-                    break
-        
-        return ret + 1
+    def get_last_free_chunk(self, section_index):
+        return self._sections[section_index].get_last_free()
     
     def save_last_free_chunk(self, section_index, filename):
         with open(filename, "wb") as chunk_file:
             chunk_file.write("0x%.4X" 
-                % self.find_last_free_chunk(section_index))
+                % self.get_last_free_chunk(section_index))
     
     def get_section(self, section_index):
         try:
@@ -206,14 +197,11 @@ class Firmware(object):
     
     # reads word (big endian)
     def _get_word(self, section_index, offset):
-        address = self._sections[section_index][offset] << 8
-        address += self._sections[section_index][offset+1]
-        return address
+        return self._sections[section_index].get_word(offset)
     
     # writes word (big endian)
     def _set_word(self, section_index, offset, value):
-        self._sections[section_index][offset] = (value >> 8) & 0xFF
-        self._sections[section_index][offset+1] = value & 0xFF
+        self._sections[section_index].set_word(offset, value)
     
     def generate_header_file(self, filename):
         with open(filename, "wb") as header_file:
@@ -258,22 +246,61 @@ class Firmware(object):
             header_file.write("__xdata __at 0x%.4X BYTE %s[1024];\n" 
                 % (0xB000, "EPBUF"))
     
-    def _add_offpage_call(self, base_address, page_address, stub_address):
+    def _add_offpage_call(self, base_address, page_section, page_address):
         """
         Add an off-page call to base section
         
         base_address:    Address in base section where the off page call is added
+        page_section: Index of the destination section.
         page_address:    Address in the destination section
-        stub_address:    Address of the off-page call stubs in the base section for the destionation section
         
         returns: first address after the off page call in the base section
         """
         self._sections[0][base_address] = 0x90
         self._set_word(0, base_address+1, page_address)
         self._sections[0][base_address+3] = 0x02
-        self._set_word(0, base_address+4, stub_address)
+        self._set_word(0, base_address+4, self._offpage_stubs[page_section])
         
         return base_address+6
+    
+    # returns address of appended offpage call
+    def _append_offpage_call(self, page_section, page_address):
+        call_address = self._sections[0].get_last_free()
+        
+        self._sections[0].append(0x90)
+        self._sections[0].append_word(page_address)
+        self._sections[0].append(0x02)
+        self._sections[0].append_word(self._offpage_stubs[page_section])
+        
+        return call_address
+    
+    def _find_offpage_call_stubs(self):
+        # find the off-page call stubs
+        offset = 0
+        for section_index in xrange(1, 17):
+            res = self.find_pattern(Patterns.OFFPAGE_CALL, offset)
+            if res is not None:
+                self._offpage_stubs[section_index] = res[1]
+                # move ahead so we can find the next stub
+                offset = res[1] + len(Patterns.OFFPAGE_CALL)
+        
+    def _add_patch(self, name, function, pattern=None, create_stub=True):
+        self._patch_dict[name] = {"function": function, "pattern": pattern,
+            "create_stub":create_stub}
+    
+    def _generate_patch_dict(self):
+        self._add_patch("_HandleControlRequest", 
+            self._patch_HandleControlRequest, 
+            Patterns.CONTROL_REQUEST_HANDLER, False)
+    
+    def _patch_HandleControlRequest(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        call_address = self._get_word(pattern_section, pattern_address+1)
+        self._set_word(pattern_section, call_address+1, patch_address)
+        if patch_section != 0:
+            # not base
+            self._set_word(pattern_section, call_address+4,
+                self._offpage_stubs[patch_section])
     
     def apply_patches(self, code_dict, rst_dict):
         # read rst files
@@ -281,29 +308,37 @@ class Firmware(object):
         for section_index, filename in rst_dict.items():
             maps[section_index] = get_address_map(filename)
         
-        # find free space in each section
-        empty_start = []
-        for section_index in xrange(17):
-            empty_start.append(self.find_last_free_chunk(section_index))
-        
         # embed code files
         for section_index, filename in code_dict.items():
             with open(filename, "rb") as code_file:
                 code = bytearray(code_file.read())
-            for i in xrange(len(code)):
-                self._sections[section_index][empty_start[section_index]+i] = code[i]
-            empty_start[section_index] += len(code)
+            self._sections[section_index].extend(code)
         
         # find the off-page call stubs
-        stubs = {}
-        offset = 0
-        for section_index in xrange(1, 17):
-            res = self.find_pattern(Patterns.OFFPAGE_CALL, offset)
+        self._find_offpage_call_stubs()
+        """
+        for patch_name, patch_data in self._patch_dict.items():
+            res = find_in_inner_dict(maps, patch_name)
             if res is not None:
-                stubs[section_index] = res[1]
-                # move ahead so we can find the next stub
-                offset = res[1] + len(Patterns.OFFPAGE_CALL)
-        
+                patch_section, patch_address = res
+                pattern_section = None
+                pattern_address = None
+                
+                if patch_data["pattern"] is not None:
+                    pattern_res = self.find_pattern(patch_data["pattern"])
+                    if pattern_res is None:
+                        continue
+                    pattern_section, pattern_address = pattern_res
+                
+                if patch_data["create_stub"] and (pattern_section != 0):
+                    # create off-page stub
+                    patch_address = self._append_offpage_call(patch_section,
+                        patch_address)
+                
+                patch_data["function"](patch_section, patch_address,
+                    pattern_section, pattern_address)
+                    
+        """
         # hook into control request handling
         res = find_in_inner_dict(maps, "_HandleControlRequest")
         if res is not None:
@@ -315,13 +350,13 @@ class Firmware(object):
                 self._set_word(res[0], call_address+1, address)
                 if section_index != 0:
                     # not base
-                    self._set_word(res[0], call_address+4, stubs[section_index])
+                    self._set_word(res[0], call_address+4, self._offpage_stubs[section_index])
         
         # replace the EP interrupt vector, handling all incoming and 
         # outgoing non-control data
         # we diverge from Psychson, since it would allow for multiple 
         # sections to contain endpoint interrupt handlers but that doesn't
-        # seam to be useful
+        # seem to be useful
         res = find_in_inner_dict(maps, "_EndpointInterrupt")
         if res is not None:
             if res[0] != 0:
@@ -337,17 +372,12 @@ class Firmware(object):
                 stub_address = address
                 if section_index != 0:
                     # create off-page stub
-                    stub_address = empty_start[0]
-                    empty_start[0] = self._add_offpage_call(
-                        empty_start[0], address, 
-                        stubs[section_index])
+                    stub_address = self.get_last_free_chunk(0)
+                    self._add_offpage_call(stub_address, section_index, address)
                 
-                self._sections[res[0]][res[1]] = 0x60
-                self._sections[res[0]][res[1]+1] = 0x0B
-                self._sections[res[0]][res[1]+2] = 0x00
+                self._sections[res[0]].set_sequence(res[1], (0x60, 0x0B, 0x00))
                 self._set_word(res[0], res[1]+4, stub_address)
-                for i in xrange(7):
-                    self._sections[res[0]][res[1]+6+i] = 0x00
+                self._sections[res[0]].set_sequence(res[1]+6, [0x00]*7)
                 
         # CDB handling code
         res = find_in_inner_dict(maps, "_HandleCDB")
@@ -359,15 +389,13 @@ class Firmware(object):
                 stub_address = address
                 if section_index != 0:
                     # create off-page stub
-                    stub_address = empty_start[0]
-                    empty_start[0] = self._add_offpage_call(
-                        empty_start[0], address, 
-                        stubs[section_index])
+                    stub_address = self.get_last_free_chunk(0)
+                    self._add_offpage_call(stub_address, section_index, address)
                 
                 #TODO: do we assume, that res[0]==0?
-                self._sections[0][res[1]] = 0x02
+                self._sections[0].set_byte(res[1], 0x02)
                 self._set_word(0, res[1]+1, stub_address)
-        
+"""        
         # add own code to infinite loop
         res = find_in_inner_dict(maps, "_LoopDo")
         if res is not None:
@@ -378,14 +406,12 @@ class Firmware(object):
                 stub_address = address
                 if section_index != 0:
                     # create off-page stub
-                    stub_address = empty_start[0]
-                    empty_start[0] = self._add_offpage_call(
-                        empty_start[0], address, 
-                        stubs[section_index])
+                    stub_address = self.get_last_free_chunk(0)
+                    self._add_offpage_call(stub_address, section_index, address)
                 
                 #TODO: do we assume, that res[0]==0?
-                loop_do_start = empty_start[0]
-                self._sections[res[0]][empty_start[0]] = 0x12
+                loop_do_start = self.get_last_free_chunk(0)
+                self._sections[res[0]].set_byte(0x12)
                 self._set_word(res[0], empty_start[0]+1, stub_address)
                 self._sections[res[0]][empty_start[0]+3] = 0x90
                 self._sections[res[0]][empty_start[0]+4] = self._sections[res[0]][res[1]+1]
@@ -421,11 +447,88 @@ class Firmware(object):
                 self._set_word(res[0], empty_start[res[0]]+4, stub_address)
                 empty_start[res[0]] += 6
                 self._set_word(res[0], pa, pass_recvd_start)
+"""
 
-def save_if_not_none(data, filename):
-    if data is not None:
+class Section(object):
+    def __init__(self, length, data_source=None):
+        if data_source is None:
+            self._data = bytearray(length)
+            self._last_free = 0
+        else:
+            data = data_source.read(length)
+            self._data = bytearray(data)
+            
+            if len(data) < length:
+                raise IOError("expected %i bytes, but got only %i" % 
+                    (length, len(data)))
+            
+            self._last_free = self._find_last_free_chunk()
+    
+    def _find_last_free_chunk(self):
+        ret = -1
+        
+        repeating = self._data[-1]
+        ret = len(self._data) - 2
+        
+        while self._data[ret] == repeating:
+            ret -= 1
+            if ret < 0:
+                break
+        
+        return ret + 1
+    
+    def get_last_free(self):
+        return self._last_free
+    
+    # update last free by passing (the highest) address written to
+    def _update_last_free(self, written_to):
+        if written_to >= self._last_free:
+            self._last_free = written_to + 1
+    
+    # reads word (big endian)
+    def get_word(self, offset):
+        value = self._data[offset] << 8
+        value += self._data[offset+1]
+        return value
+    
+    def set_byte(self, offset, value):
+        self._data[offset] = value
+        self._update_last_free(offset)
+    
+    # writes word (big endian)
+    def set_word(self, offset, value):
+        self._data[offset] = (value >> 8) & 0xFF
+        self._data[offset+1] = value & 0xFF
+        self._update_last_free(offset+1)
+    
+    def set_sequence(self, offset, values):
+        for i in xrange(len(values)):
+            self._data[offset+i] = values[i]
+        self._update_last_free(offset+len(values)-1)
+        
+    def append(self, value):
+        self.set_byte(self._last_free, value)
+    
+    def extend(self, values):
+        self.set_sequence(self._last_free, values)
+    
+    def append_word(self, value):
+        self.set_word(self._last_free, value)
+    
+    def write_to_file(self, output_file):
+        output_file.write(self._data)
+    
+    def search(self, regex, offset):
+        return regex.search(self._data, offset)
+    
+    def get_all(self):
+        return bytearray(self._data)
+    
+# only with sections
+def save_if_not_none(sec, filename):
+    if sec is not None:
         with open(filename, "wb") as data_file:
-            data_file.write(data)
+            sec.write_to_file(data_file)
 
 
 def check_firmware_image(filename):

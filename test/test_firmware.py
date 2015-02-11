@@ -42,9 +42,9 @@ class TestFirmware(unittest.TestCase):
         # delete saved file
         os.remove(filename)
         
-    def test_get_section(self):
+    def test_get_section_data(self):
         for i in xrange(len(sections)):
-            self.assertSequenceEqual(self._fw.get_section(i), 
+            self.assertSequenceEqual(self._fw.get_section(i).get_all(), 
                 sections[i], 
                 "%s returned incorrect" % section_index_to_name(i))
     
@@ -54,9 +54,9 @@ class TestFirmware(unittest.TestCase):
             self.assertEqual(res, expected, 
                 "got %s, but expected %s" % (res, expected))
     
-    def test_find_last_free_chunk(self):
+    def test_get_last_free_chunk(self):
         for i in xrange(len(sections)):
-            self.assertEqual(self._fw.find_last_free_chunk(i),
+            self.assertEqual(self._fw.get_last_free_chunk(i),
                 free_chunks[i],
                 "free chunk wrong for %s" % section_index_to_name(i))
     
