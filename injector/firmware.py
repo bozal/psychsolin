@@ -179,7 +179,7 @@ class Firmware(object):
             if res is not None:
                 return (index, res.start(0))
         
-        return None
+        return (None, None)
     
     def get_last_free_chunk(self, section_index):
         return self._sections[section_index].get_last_free()
@@ -206,7 +206,7 @@ class Firmware(object):
     def generate_header_file(self, filename):
         with open(filename, "wb") as header_file:
             res = self.find_pattern(Patterns.BMREQUESTTYPE)
-            if res is not None:
+            if res[0] is not None:
                 address = self._get_word(res[0], res[1]+5)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
                     % (address, "bmRequestType"))
@@ -214,7 +214,7 @@ class Firmware(object):
                     % (address+1, "bRequest"))
             
             res = self.find_pattern(Patterns.SCSI_CDB)
-            if res is not None:
+            if res[0] is not None:
                 address = self._get_word(res[0], res[1]+1)
                 header_file.write("__xdata __at 0x%.4X BYTE %s[16];\n"
                     % (address, "scsi_cdb"))
@@ -227,18 +227,18 @@ class Firmware(object):
                 handler_pattern = (0x90, address>>8, address&0xFF, # mov DPTR, #scsi_tag
                     0xE0, 0x12) # mvox A, @DPTR \ lcall 0x????
                 res = self.find_pattern(handler_pattern, res[1])
-                if res is not None:
+                if res[0] is not None:
                     header_file.write("#define %s 0x%.4X\n"
                         % ("DEFAULT_CDB_HANDLER", res[1]))
             
             res = self.find_pattern(Patterns.SCSI_TAG)
-            if res is not None:
+            if res[0] is not None:
                 address = self._get_word(res[0], res[1]+len(Patterns.SCSI_TAG))
                 header_file.write("__xdata __at 0x%.4X BYTE %s[4];\n"
                     % (address-3, "scsi_tag"))
             
             res = self.find_pattern(Patterns.FW_EPIRQ)
-            if res is not None:
+            if res[0] is not None:
                 address = self._get_word(res[0], res[1]+17)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
                     % (address, "FW_EPIRQ"))
@@ -279,7 +279,7 @@ class Firmware(object):
         offset = 0
         for section_index in xrange(1, 17):
             res = self.find_pattern(Patterns.OFFPAGE_CALL, offset)
-            if res is not None:
+            if res[0] is not None:
                 self._offpage_stubs[section_index] = res[1]
                 # move ahead so we can find the next stub
                 offset = res[1] + len(Patterns.OFFPAGE_CALL)
@@ -292,15 +292,95 @@ class Firmware(object):
         self._add_patch("_HandleControlRequest", 
             self._patch_HandleControlRequest, 
             Patterns.CONTROL_REQUEST_HANDLER, False)
+        self._add_patch("_EndpointInterrupt",
+            self._patch_EndpointInterrupt,
+            None, False)
+        self._add_patch("_HandleEndpointInterrupt",
+            self._patch_HandleEndpointInterrupt,
+            Patterns.ENDPOINT_INTERRUPT_HANDLER, True)
+        self._add_patch("_HandleCDB",
+            self._patch_HandleCDB,
+            Patterns.CDB_HANDLER, True)
+        self._add_patch("_LoopDo",
+            self._patch_LoopDo,
+            Patterns.MAIN_LOOP, True)
+        self._add_patch("_PasswordReceived",
+            self._patch_PasswordReceived,
+            Patterns.PASSWORD_HANDLER, True)
     
     def _patch_HandleControlRequest(self, patch_section, patch_address,
             pattern_section, pattern_address):
+        # hook into control request handling
         call_address = self._get_word(pattern_section, pattern_address+1)
         self._set_word(pattern_section, call_address+1, patch_address)
         if patch_section != 0:
             # not base
             self._set_word(pattern_section, call_address+4,
                 self._offpage_stubs[patch_section])
+    
+    def _patch_EndpointInterrupt(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        # replace the EP interrupt vector, handling all incoming and 
+        # outgoing non-control data
+        # we diverge from Psychson, since it would allow for multiple 
+        # sections to contain endpoint interrupt handlers but that doesn't
+        # seem to be useful
+        if patch_section != 0:
+            self._logger.error("endpoint interupt not in base section")
+            return
+        self._set_word(0, 0x0014, patch_address)
+    
+    def _patch_HandleEndpointInterrupt(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        sect = self._sections[pattern_section]
+        sect.set_sequence(pattern_address, (0x60, 0x0B, 0x00))
+        sect.set_word(pattern_address+4, patch_address)
+        sect.set_sequence(pattern_address+6, [0x00]*7)
+    
+    def _patch_HandleCDB(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        # CDB handling code
+        #TODO: do we assume, that pattern_section==0?
+        sect = self._sections[0]
+        sect.set_byte(pattern_address, 0x02)
+        sect.set_word(pattern_address+1, patch_address)
+    
+    def _patch_LoopDo(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        # add own code to infinite loop
+        
+        #TODO: do we assume, that pattern_section==0?
+        # at this point Psychson uses pattern_section together with the 
+        # last free chunk of Base; 
+        # that implies that pattern_section is expected to be 0 (index of Base)
+        sect = self._sections[pattern_section]
+        loop_do_start = sect.get_last_free()
+        sect.append(0x12)
+        sect.append_word(patch_address)
+        sect.append(0x90)
+        sect.append_word(sect.get_word(pattern_address+1))
+        sect.append(0x22)
+        
+        sect.set_byte(pattern_address, 0x12)
+        sect.set_word(pattern_address+1, loop_do_start)
+    
+    def _patch_PasswordReceived(self, patch_section, patch_address,
+            pattern_section, pattern_address):
+        # apply password patch code
+        sect = self._sections[pattern_section]
+        pattern_address += 0x24
+        
+        pass_recvd_start = sect.get_last_free()
+        if pattern_section != 0:
+            # not base
+            pass_recvd_start += 0x5000
+        
+        sect.append(0x12)
+        sect.append_word(sect.get_word(pattern_address))
+        sect.append(0x02)
+        sect.append(patch_address)
+        sect.set_word(pattern_address, pass_recvd_start)
+        
     
     def apply_patches(self, code_dict, rst_dict):
         # read rst files
@@ -316,19 +396,18 @@ class Firmware(object):
         
         # find the off-page call stubs
         self._find_offpage_call_stubs()
-        """
+        
         for patch_name, patch_data in self._patch_dict.items():
-            res = find_in_inner_dict(maps, patch_name)
-            if res is not None:
-                patch_section, patch_address = res
+            patch_section, patch_address = find_in_inner_dict(maps, patch_name)
+            if patch_section is not None:
                 pattern_section = None
                 pattern_address = None
                 
                 if patch_data["pattern"] is not None:
-                    pattern_res = self.find_pattern(patch_data["pattern"])
-                    if pattern_res is None:
+                    pattern_section, pattern_address = self.find_pattern(
+                        patch_data["pattern"])
+                    if pattern_section is None:
                         continue
-                    pattern_section, pattern_address = pattern_res
                 
                 if patch_data["create_stub"] and (pattern_section != 0):
                     # create off-page stub
@@ -338,116 +417,6 @@ class Firmware(object):
                 patch_data["function"](patch_section, patch_address,
                     pattern_section, pattern_address)
                     
-        """
-        # hook into control request handling
-        res = find_in_inner_dict(maps, "_HandleControlRequest")
-        if res is not None:
-            section_index, address = res
-            
-            res = self.find_pattern(Patterns.CONTROL_REQUEST_HANDLER)
-            if res is not None:
-                call_address = self._get_word(res[0], res[1]+1)
-                self._set_word(res[0], call_address+1, address)
-                if section_index != 0:
-                    # not base
-                    self._set_word(res[0], call_address+4, self._offpage_stubs[section_index])
-        
-        # replace the EP interrupt vector, handling all incoming and 
-        # outgoing non-control data
-        # we diverge from Psychson, since it would allow for multiple 
-        # sections to contain endpoint interrupt handlers but that doesn't
-        # seem to be useful
-        res = find_in_inner_dict(maps, "_EndpointInterrupt")
-        if res is not None:
-            if res[0] != 0:
-                self._logger.error("endpoint interupt not in base section")
-            self._set_word(0, 0x0014, res[1])
-        
-        res = find_in_inner_dict(maps, "_HandleEndpointInterrupt")
-        if res is not None:
-            section_index, address = res
-            
-            res = self.find_pattern(Patterns.ENDPOINT_INTERRUPT_HANDLER)
-            if res is not None:
-                stub_address = address
-                if section_index != 0:
-                    # create off-page stub
-                    stub_address = self.get_last_free_chunk(0)
-                    self._add_offpage_call(stub_address, section_index, address)
-                
-                self._sections[res[0]].set_sequence(res[1], (0x60, 0x0B, 0x00))
-                self._set_word(res[0], res[1]+4, stub_address)
-                self._sections[res[0]].set_sequence(res[1]+6, [0x00]*7)
-                
-        # CDB handling code
-        res = find_in_inner_dict(maps, "_HandleCDB")
-        if res is not None:
-            section_index, address = res
-            
-            res = self.find_pattern(Patterns.CDB_HANDLER)
-            if res is not None:
-                stub_address = address
-                if section_index != 0:
-                    # create off-page stub
-                    stub_address = self.get_last_free_chunk(0)
-                    self._add_offpage_call(stub_address, section_index, address)
-                
-                #TODO: do we assume, that res[0]==0?
-                self._sections[0].set_byte(res[1], 0x02)
-                self._set_word(0, res[1]+1, stub_address)
-"""        
-        # add own code to infinite loop
-        res = find_in_inner_dict(maps, "_LoopDo")
-        if res is not None:
-            section_index, address = res
-            
-            res = self.find_pattern(Patterns.MAIN_LOOP)
-            if res is not None:
-                stub_address = address
-                if section_index != 0:
-                    # create off-page stub
-                    stub_address = self.get_last_free_chunk(0)
-                    self._add_offpage_call(stub_address, section_index, address)
-                
-                #TODO: do we assume, that res[0]==0?
-                loop_do_start = self.get_last_free_chunk(0)
-                self._sections[res[0]].set_byte(0x12)
-                self._set_word(res[0], empty_start[0]+1, stub_address)
-                self._sections[res[0]][empty_start[0]+3] = 0x90
-                self._sections[res[0]][empty_start[0]+4] = self._sections[res[0]][res[1]+1]
-                self._sections[res[0]][empty_start[0]+5] = self._sections[res[0]][res[1]+2]
-                self._sections[res[0]][empty_start[0]+6] = 0x22
-                empty_start[0] += 7
-                self._sections[res[0]][res[1]] = 0x12
-                self._set_word(res[0], res[1]+1, loop_do_start)
-        
-        # apply password patch code
-        res = find_in_inner_dict(maps, "_PasswordReceived")
-        if res is not None:
-            section_index, address = res
-            
-            res = self.find_pattern(Patterns.PASSWORD_HANDLER)
-            if res is not None:
-                stub_address = address
-                if section_index != 0:
-                    # create off-page stub
-                    stub_address = empty_start[0]
-                    empty_start[0] = self._add_offpage_call(
-                        empty_start[0], address, 
-                        stubs[section_index])
-                        
-                pa = res[1] + 0x24
-                pass_recvd_start = empty_start[res[0]]
-                if res[0] != 0:
-                    pass_recvd_start += 0x5000
-                self._sections[res[0]][empty_start[res[0]]] = 0x12
-                self._sections[res[0]][empty_start[res[0]]+1] = self._sections[res[0]][pa]
-                self._sections[res[0]][empty_start[res[0]]+2] = self._sections[res[0]][pa+1]
-                self._sections[res[0]][empty_start[res[0]]+3] = 0x02
-                self._set_word(res[0], empty_start[res[0]]+4, stub_address)
-                empty_start[res[0]] += 6
-                self._set_word(res[0], pa, pass_recvd_start)
-"""
 
 class Section(object):
     def __init__(self, length, data_source=None):
@@ -558,4 +527,4 @@ def find_in_inner_dict(outer_dict, inner_key):
         if inner_key in inner_dict:
             return (outer_key, inner_dict[inner_key])
     
-    return None
+    return (None, None)
