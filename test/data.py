@@ -91,7 +91,7 @@ pattern_search = (
     ((0x39, 0x2E, 0xC1), 0, (1, 0xC9)),          # escaping of '.' aka 0x2E
     ((0x39, None, 0xC1), 0, (1, 0x1B)),          # result with wildcard instead of 0x2E
     ((None,), 0x34, (0, 0x34)),                  # single wildcard
-    ((0xCA, 0x4C, 0x97, 0xF4), 0, None),         # not occuring pattern
+    ((0xCA, 0x4C, 0x97, 0xF4), 0, (None, None)),         # not occuring pattern
 )
 
 # binary data for example firmware
