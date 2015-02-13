@@ -246,23 +246,6 @@ class Firmware(object):
             header_file.write("__xdata __at 0x%.4X BYTE %s[1024];\n" 
                 % (0xB000, "EPBUF"))
     
-    def _add_offpage_call(self, base_address, page_section, page_address):
-        """
-        Add an off-page call to base section
-        
-        base_address:    Address in base section where the off page call is added
-        page_section: Index of the destination section.
-        page_address:    Address in the destination section
-        
-        returns: first address after the off page call in the base section
-        """
-        self._sections[0][base_address] = 0x90
-        self._set_word(0, base_address+1, page_address)
-        self._sections[0][base_address+3] = 0x02
-        self._set_word(0, base_address+4, self._offpage_stubs[page_section])
-        
-        return base_address+6
-    
     # returns address of appended offpage call
     def _append_offpage_call(self, page_section, page_address):
         base = self._sections[0]
