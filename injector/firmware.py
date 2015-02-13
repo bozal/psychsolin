@@ -265,12 +265,13 @@ class Firmware(object):
     
     # returns address of appended offpage call
     def _append_offpage_call(self, page_section, page_address):
-        call_address = self._sections[0].get_last_free()
+        base = self._sections[0]
+        call_address = base.get_last_free()
         
-        self._sections[0].append(0x90)
-        self._sections[0].append_word(page_address)
-        self._sections[0].append(0x02)
-        self._sections[0].append_word(self._offpage_stubs[page_section])
+        base.append(0x90)
+        base.append_word(page_address)
+        base.append(0x02)
+        base.append_word(self._offpage_stubs[page_section])
         
         return call_address
     
@@ -378,7 +379,7 @@ class Firmware(object):
         sect.append(0x12)
         sect.append_word(sect.get_word(pattern_address))
         sect.append(0x02)
-        sect.append(patch_address)
+        sect.append_word(patch_address)
         sect.set_word(pattern_address, pass_recvd_start)
         
     
@@ -409,11 +410,12 @@ class Firmware(object):
                     if pattern_section is None:
                         continue
                 
-                if patch_data["create_stub"] and (pattern_section != 0):
+                if patch_data["create_stub"] and (patch_section != 0):
                     # create off-page stub
                     patch_address = self._append_offpage_call(patch_section,
                         patch_address)
                 
+                self._logger.info("Applying patch %s", patch_name)
                 patch_data["function"](patch_section, patch_address,
                     pattern_section, pattern_address)
                     
