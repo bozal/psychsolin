@@ -18,7 +18,7 @@ if __name__ == '__main__':
         help="action to be performed by the program")
     parser.add_argument("-s", "--section", choices=section_names, 
         help="defines section for --action FindFreeBlock")
-    parser.add_argument("-f", "--firmware",  
+    parser.add_argument("-f", "--firmware", required=True,
         help="firmware that should be injected with code")
     parser.add_argument("-o", "--output", required=True,
         help="destination of the result")

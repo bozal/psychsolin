@@ -205,41 +205,47 @@ class Firmware(object):
     
     def generate_header_file(self, filename):
         with open(filename, "wb") as header_file:
-            res = self.find_pattern(Patterns.BMREQUESTTYPE)
-            if res[0] is not None:
-                address = self._get_word(res[0], res[1]+5)
+            pattern_section, pattern_address = self.find_pattern(
+                Patterns.BMREQUESTTYPE)
+            if pattern_section is not None:
+                address = self._get_word(pattern_section, pattern_address+5)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
                     % (address, "bmRequestType"))
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
                     % (address+1, "bRequest"))
             
-            res = self.find_pattern(Patterns.SCSI_CDB)
-            if res[0] is not None:
-                address = self._get_word(res[0], res[1]+1)
+            pattern_section, pattern_address = self.find_pattern(
+                Patterns.SCSI_CDB)
+            if pattern_section is not None:
+                address = self._get_word(pattern_section, pattern_address+1)
                 header_file.write("__xdata __at 0x%.4X BYTE %s[16];\n"
                     % (address, "scsi_cdb"))
                 #TODO: sure that we can take the result? 
                 # since it might be a swapped in section,
                 # so address is result + 0x5000
                 header_file.write("#define %s 0x%.4X\n"
-                    % ("DEFAULT_READ_SECTOR_HANDLER", res[1]+7))
+                    % ("DEFAULT_READ_SECTOR_HANDLER", pattern_address+7))
                 
                 handler_pattern = (0x90, address>>8, address&0xFF, # mov DPTR, #scsi_tag
                     0xE0, 0x12) # mvox A, @DPTR \ lcall 0x????
-                res = self.find_pattern(handler_pattern, res[1])
-                if res[0] is not None:
+                handler_section, handler_address = self.find_pattern(
+                    handler_pattern, pattern_address)
+                if handler_section is not None:
                     header_file.write("#define %s 0x%.4X\n"
-                        % ("DEFAULT_CDB_HANDLER", res[1]))
+                        % ("DEFAULT_CDB_HANDLER", handler_address))
             
-            res = self.find_pattern(Patterns.SCSI_TAG)
-            if res[0] is not None:
-                address = self._get_word(res[0], res[1]+len(Patterns.SCSI_TAG))
+            pattern_section, pattern_address = self.find_pattern(
+                Patterns.SCSI_TAG)
+            if pattern_section is not None:
+                address = self._get_word(pattern_section, 
+                    pattern_address+len(Patterns.SCSI_TAG))
                 header_file.write("__xdata __at 0x%.4X BYTE %s[4];\n"
                     % (address-3, "scsi_tag"))
             
-            res = self.find_pattern(Patterns.FW_EPIRQ)
-            if res[0] is not None:
-                address = self._get_word(res[0], res[1]+17)
+            pattern_section, pattern_address = self.find_pattern(
+                Patterns.FW_EPIRQ)
+            if pattern_section is not None:
+                address = self._get_word(pattern_section, pattern_address+17)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
                     % (address, "FW_EPIRQ"))
             
@@ -262,11 +268,12 @@ class Firmware(object):
         # find the off-page call stubs
         offset = 0
         for section_index in xrange(1, 17):
-            res = self.find_pattern(Patterns.OFFPAGE_CALL, offset)
-            if res[0] is not None:
-                self._offpage_stubs[section_index] = res[1]
+            call_section, call_address = self.find_pattern(
+                Patterns.OFFPAGE_CALL, offset)
+            if call_section is not None:
+                self._offpage_stubs[section_index] = call_address
                 # move ahead so we can find the next stub
-                offset = res[1] + len(Patterns.OFFPAGE_CALL)
+                offset = call_address + len(Patterns.OFFPAGE_CALL)
         
     def _add_patch(self, name, function, pattern=None, create_stub=True):
         self._patch_dict[name] = {"function": function, "pattern": pattern,
@@ -391,6 +398,8 @@ class Firmware(object):
                     pattern_section, pattern_address = self.find_pattern(
                         patch_data["pattern"])
                     if pattern_section is None:
+                        self._logger.error("Can't find pattern for %s. "
+                            "Don't apply patch", patch_name)
                         continue
                 
                 if patch_data["create_stub"] and (patch_section != 0):
@@ -503,8 +512,8 @@ def get_address_map(filename):
     
     return address_map
 
-# searches inner dictionaries that are value of an outer dictionary for a certain inner key
-# and returns the outer key and the inner value for the or None
+# search inner dictionaries that are value of an outer dictionary for a certain inner key
+# and return the outer key and the inner value for the or None
 # e.g. d={0:{"a":23}, 4:{"b":24, "gwr":2}}
 # find_key_in_dict_dict(d, "b") returns (4, 24)
 def find_in_inner_dict(outer_dict, inner_key):
