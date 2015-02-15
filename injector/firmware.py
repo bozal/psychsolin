@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import patterns
+
 import os
 import re
 import hashlib
@@ -13,75 +15,6 @@ SECTION_LENGTH = 0x4000
 FOOTER_LENGTH = 0x200
 # md5 hashes of supported firmwares
 VERIFIED = ('4c4c0001ec83102c4627d271ff8362a2', )
-
-class Patterns(object):
-    BMREQUESTTYPE = (
-        0x90, 0xF0, 0xB8, 0xE0, # mov DPTR, #0xF0B8 \ movx a, @DPTR
-        0x90, None, None, 0xF0, # mov DPTR, #0x???? \ movx @DPTR, a
-        0x90, 0xF0, 0xB9, 0xE0  # mov DPTR, #0xF0B9 \ movx a, @DPTR \ movx DPTR, #0x????
-    )
-    
-    SCSI_CDB = (
-        0x90, None, None, 0xE0, # mov DPTR, #0x???? \ movx a, @DPTR
-        0xB4, 0x28 # cjne A, #0x28, ????
-    )
-    
-    SCSI_TAG = (
-        0x90, 0xF2, 0x1C, # mov DPTR, #0xF21C
-        0x74, 0x55, 0xF0, # mov A, #0x55 \ movx @DPTR, A
-        0x74, 0x53, 0xF0, # mov A, #0x53 \ movx @DPTR, A
-        0x74, 0x42, 0xF0, # mov A, #0x42 \ movx @DPTR, A
-        0x74, 0x53, 0xF0, # mov A, #0x53 \ movx @DPTR, A
-        0x90 # mov DPTR, #0x????
-    )
-    
-    FW_EPIRQ = (
-        0xC0, 0xE0, 0xC0, 0x83, 0xC0, 0x82, # push ACC \ push DPH \ push DPL
-        0x90, 0xF0, 0x20, 0xE0, # mov DPTR, #0xF020 \ movx A, @DPTR
-        0x30, 0xE1, None, # jnb ACC.1, ????
-        0x12, None, None, 0x90 # lcall ???? \ mov DPTR, #0x????
-    )
-    
-    OFFPAGE_CALL = (
-        0xC0, 0x5B, 0x74, 0x08, # push RAM_5B \ mov A, #8
-        0xC0, 0xE0, 0xC0, 0x82, 0xC0, 0x83, # push ACC \ push DPL \ push DPH
-        0x75, 0x5B # mov RAM_5B, #0x??
-    )
-    
-    CONTROL_REQUEST_HANDLER = (
-        0x12, None, None, # lcall #0x????
-        0x90, 0xFE, 0x82, 0xE0, # mov DPTR, #0xFE82 \ movx A, @DPTR
-        0x54, 0xEF, 0xF0 # anl A, #0xEF \ movx @DPTR, A
-    )
-    
-    ENDPOINT_INTERRUPT_HANDLER = (
-        0x30, 0xE1, None, # jnb ACC.1, #0x????
-        0x12, None, None, # lcall #0x????
-        0x90, 0xFE, 0x82, 0xE0, # mov DPTR, #0xFE82 \ movx A, @DPTR
-        0x54, 0xEF, 0xF0 # anl A, #0xEF \ movx @DPTR, A
-    )
-    
-    CDB_HANDLER = (
-        0x90, None, None, 0xE0, # mov DPTR, #0x???? \ movx a, @DPTR
-        0xB4, 0x28 # cjne A, #0x28, ????
-    )
-    
-    MAIN_LOOP = (
-        0x90, None, None, 0xE0, # mov DPTR, #0x???? \ movx A, @DPTR
-        0xB4, 0x01, None, # cjne A, #1, #0x????
-        0x90, 0xF0, 0x79 # mov DPTR, #0xF079
-    )
-    
-    PASSWORD_HANDLER = (
-        0x90, 0xF2, 0x4C, 0xF0, 0xA3, # mov DPTR, #0xF24C \ movx @DPTR, A \ inc DPTR
-        0xC0, 0x83, 0xC0, 0x82, 0x12, # push DPH \ push DPL
-        None, None, 0xD0, 0x82, 0xD0, 0x83, 0xF0, # lcall #0x???? \ pop DPL \ pop DPH \ movx @DPTR, A
-        0x90, 0xF2, 0x53, 0x74, 0x80, 0xF0, # mov DPTR, #0xF253 \ mov A, #0x80 \ movx @DPTR, A
-        0x90, 0xF2, 0x53, 0xE0, # mov DPTR, #0xF253 \ movx A, @DPTR
-        0x30, 0xE7, None, # jnb ACC.7, #0x????
-        0x12, None, None, 0x40, None, # lcall #0x???? \ jc #0x????
-        0x12, None, None, 0x7F, 0x00, 0x22 # lcall #0x???? \ mov R7, #0 \ ret
-    )
 
 class Firmware(object):
     def __init__(self):
@@ -206,7 +139,7 @@ class Firmware(object):
     def generate_header_file(self, filename):
         with open(filename, "wb") as header_file:
             pattern_section, pattern_address = self.find_pattern(
-                Patterns.BMREQUESTTYPE)
+                patterns.BMREQUESTTYPE)
             if pattern_section is not None:
                 address = self._get_word(pattern_section, pattern_address+5)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
@@ -215,7 +148,7 @@ class Firmware(object):
                     % (address+1, "bRequest"))
             
             pattern_section, pattern_address = self.find_pattern(
-                Patterns.SCSI_CDB)
+                patterns.SCSI_CDB)
             if pattern_section is not None:
                 address = self._get_word(pattern_section, pattern_address+1)
                 header_file.write("__xdata __at 0x%.4X BYTE %s[16];\n"
@@ -235,15 +168,15 @@ class Firmware(object):
                         % ("DEFAULT_CDB_HANDLER", handler_address))
             
             pattern_section, pattern_address = self.find_pattern(
-                Patterns.SCSI_TAG)
+                patterns.SCSI_TAG)
             if pattern_section is not None:
                 address = self._get_word(pattern_section, 
-                    pattern_address+len(Patterns.SCSI_TAG))
+                    pattern_address+len(patterns.SCSI_TAG))
                 header_file.write("__xdata __at 0x%.4X BYTE %s[4];\n"
                     % (address-3, "scsi_tag"))
             
             pattern_section, pattern_address = self.find_pattern(
-                Patterns.FW_EPIRQ)
+                patterns.FW_EPIRQ)
             if pattern_section is not None:
                 address = self._get_word(pattern_section, pattern_address+17)
                 header_file.write("__xdata __at 0x%.4X BYTE %s;\n"
@@ -269,11 +202,11 @@ class Firmware(object):
         offset = 0
         for section_index in xrange(1, 17):
             call_section, call_address = self.find_pattern(
-                Patterns.OFFPAGE_CALL, offset)
+                patterns.OFFPAGE_CALL, offset)
             if call_section is not None:
                 self._offpage_stubs[section_index] = call_address
                 # move ahead so we can find the next stub
-                offset = call_address + len(Patterns.OFFPAGE_CALL)
+                offset = call_address + len(patterns.OFFPAGE_CALL)
         
     def _add_patch(self, name, function, pattern=None, create_stub=True):
         self._patch_dict[name] = {"function": function, "pattern": pattern,
@@ -282,22 +215,22 @@ class Firmware(object):
     def _generate_patch_dict(self):
         self._add_patch("_HandleControlRequest", 
             self._patch_HandleControlRequest, 
-            Patterns.CONTROL_REQUEST_HANDLER, False)
+            patterns.CONTROL_REQUEST_HANDLER, False)
         self._add_patch("_EndpointInterrupt",
             self._patch_EndpointInterrupt,
             None, False)
         self._add_patch("_HandleEndpointInterrupt",
             self._patch_HandleEndpointInterrupt,
-            Patterns.ENDPOINT_INTERRUPT_HANDLER, True)
+            patterns.ENDPOINT_INTERRUPT_HANDLER, True)
         self._add_patch("_HandleCDB",
             self._patch_HandleCDB,
-            Patterns.CDB_HANDLER, True)
+            patterns.CDB_HANDLER, True)
         self._add_patch("_LoopDo",
             self._patch_LoopDo,
-            Patterns.MAIN_LOOP, True)
+            patterns.MAIN_LOOP, True)
         self._add_patch("_PasswordReceived",
             self._patch_PasswordReceived,
-            Patterns.PASSWORD_HANDLER, True)
+            patterns.PASSWORD_HANDLER, True)
     
     def _patch_HandleControlRequest(self, patch_section, patch_address,
             pattern_section, pattern_address):
