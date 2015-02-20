@@ -5,6 +5,16 @@ import random
 
 
 def random_section(random_length, length):
+    """Create list containing random byte values followed by zeros.
+    
+    Args:
+      random_length: Number of random values. Has to be less than
+          or equal length.
+      length: Overall length of the requested list.
+    
+    Returns:
+      List containing random values followed by zeros.
+    """
     data = []
     random.seed()
     for _ in xrange(random_length):
@@ -16,6 +26,22 @@ def random_section(random_length, length):
 
 
 def format_bytes(data, line_prefix="", numbers_per_line=16):
+    """Create string from the data regarding a certain format.
+    
+    A line of the created string consists of the prefix, a certain amount of 
+    data entries in hex separated by commas, a hash sign and the offset of
+    the first data entry on the line in hex.
+    
+    Args:
+      data: Sequence of byte values.
+      line_prefix: Prefix that is put in front of ever line in the string.
+          Default is ''.
+      numbers_per_line: Number of data entries per line.
+          Default is 16.
+    
+    Returns:
+      String containing the data set.
+    """
     parts = []
     
     # full lines
@@ -36,8 +62,20 @@ def format_bytes(data, line_prefix="", numbers_per_line=16):
     
     return "".join(parts)
 
-# create data for firmware as python code
+
 def create_firmware_string(section_count):
+    """Create random data for firmware as python code.
+    
+    All data is represented as bytearray.
+    The data consists of a header, a footer and a list called sections
+    containing the base section and the specified number of addtional sections.
+    
+    Args:
+      section_count: Number of section to be created (additional to the base)
+    
+    Returns:
+      String containing the random data as python code.
+    """
     parts = []
     prefix = "\t"
     
