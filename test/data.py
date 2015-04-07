@@ -1,5 +1,6 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
+"""Provide sample data for firmware tests and basic methods to generate it."""
 
 import random
 
