@@ -1,5 +1,6 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
+"""Provide objects and helper methods for handling firmware binaries."""
 
 import patterns
 
@@ -17,6 +18,8 @@ FOOTER_LENGTH = 0x200
 VERIFIED = ('4c4c0001ec83102c4627d271ff8362a2', )
 
 class Firmware(object):
+    """Represent complete firmware binary."""
+    
     def __init__(self):
         self._reset()
         self._sections.append(Section(BASE_LENGTH))
@@ -25,6 +28,7 @@ class Firmware(object):
         self._generate_patch_dict()
     
     def _reset(self):
+        """Clear all data structures."""
         self._filename = None
         self._header = None
         # store base at 0, other sections at section number + 1
@@ -34,6 +38,14 @@ class Firmware(object):
         self._offpage_stubs = {}
     
     def load_from_file(self, filename):
+        """Load firmware from file.
+        
+        The binary file is expected to have a header, followed by the different
+        sections and and an optional footer.
+        
+        Args:
+          filename: Name of the file containing the firmware.
+        """
         self._reset()
         
         self._filename = filename
@@ -58,6 +70,11 @@ class Firmware(object):
                 (filesize - firmware_file.tell()))
     
     def save(self, filename):
+        """Save firmware to file.
+        
+        Args:
+          filename: Name of the file.
+        """
         with open(filename, "wb") as firmware_file:
             self._header.write_to_file(firmware_file)
             
@@ -68,6 +85,14 @@ class Firmware(object):
                 self._footer.write_to_file(firmware_file)
     
     def save_separate(self, filename):
+        """Save header, footer and every section to a different file.
+        
+        The passed file name is used as a base for the files.
+        
+        Args:
+          filename: Name base for the created files.
+        """
+        
         # save header
         save_if_not_none(self._header, "%s.header.bin" % filename)
         
@@ -79,9 +104,25 @@ class Firmware(object):
         # save footer
         save_if_not_none(self._footer, "%s.footer.bin" % filename)
     
-    # byte_pattern is sequence of bytes (and None) to represent the searched pattern
-    # None is a wildcard
     def find_pattern(self, byte_pattern, offset=0):
+        """Search for a byte pattern.
+        
+        The sections are seached in acending order of their section index,
+        starting with base, followed by section 0.
+        
+        None is regarded as wildcard and matches every byte value.
+        
+        Args:
+          byte_pattern: Sequence of byte values and None (wildcard).
+          offset: Offset the search starts in each section.
+              Default is 0.
+        
+        Returns:
+          Returns a tuple (section index, match start) of the first found
+          occurence of the byte pattern or (None, None) if the byte pattern 
+          wasn't found.
+        """
+        
         # transform to pattern
         parts = []
         seq = []
@@ -115,28 +156,77 @@ class Firmware(object):
         return (None, None)
     
     def get_last_free_chunk(self, section_index):
+        """Get last free chunk of a section.
+        
+        Args:
+          section_index: Index of the section.
+        
+        Returns:
+          Offset of the first byte of the last free chunk.
+        """
         return self._sections[section_index].get_last_free()
     
     def save_last_free_chunk(self, section_index, filename):
+        """Write last free chunk of a section to a file.
+        
+        The offset of the first byte of the last fre chunk is written as 
+        hex number in ASCII.
+        
+        Args:
+          section_index: Index of the section.
+          filename: Name of the file.
+        """
         with open(filename, "wb") as chunk_file:
             chunk_file.write("0x%.4X" 
                 % self.get_last_free_chunk(section_index))
     
     def get_section(self, section_index):
+        """Get section.
+        
+        Args:
+          section_index: Index of the section.
+        
+        Returns:
+          Object representing the section.
+        """
         try:
             return self._sections[section_index]
         except IndexError:
             return None
     
-    # reads word (big endian)
     def _get_word(self, section_index, offset):
+        """Read word from binary.
+        
+        Reads word big endian.
+        
+        Args:
+          section_index: Index of the section.
+          offset: Offset in the section.
+        
+        Returns:
+          Value of the word.
+        """
         return self._sections[section_index].get_word(offset)
     
     # writes word (big endian)
     def _set_word(self, section_index, offset, value):
+        """Write word to binary.
+        
+        Writes word big endian.
+        
+        Args:
+          section_index: Index of the section.
+          offset: Offset in the section.
+          value: Value of the word.
+        """
         self._sections[section_index].set_word(offset, value)
     
     def generate_header_file(self, filename):
+        """Generate C header file corresponding to the binary.
+        
+        Args:
+          filename: Name of the header file.
+        """
         with open(filename, "wb") as header_file:
             pattern_section, pattern_address = self.find_pattern(
                 patterns.BMREQUESTTYPE)
@@ -185,8 +275,16 @@ class Firmware(object):
             header_file.write("__xdata __at 0x%.4X BYTE %s[1024];\n" 
                 % (0xB000, "EPBUF"))
     
-    # returns address of appended offpage call
     def _append_offpage_call(self, page_section, page_address):
+        """Append off page call to base section.
+        
+        Args:
+          page_section: Index of the section containing the called code.
+          page_address: Address of the called code in the section.
+        
+        Returns:
+          Address of appended offpage call in the base section.
+        """
         base = self._sections[0]
         call_address = base.get_last_free()
         
@@ -198,6 +296,8 @@ class Firmware(object):
         return call_address
     
     def _find_offpage_call_stubs(self):
+        """Initiate internal structure providing off page call stubs."""
+        
         # find the off-page call stubs
         offset = 0
         for section_index in xrange(1, 17):
@@ -209,10 +309,25 @@ class Firmware(object):
                 offset = call_address + len(patterns.OFFPAGE_CALL)
         
     def _add_patch(self, name, function, pattern=None, create_stub=True):
+        """Add patch to internal patch dictionary.
+        
+        Args:
+          name: Name of the patch.
+          function: Function that contains the code to apply the patch. Has to
+              accept four parameters (patch_section, patch_address,
+              pattern_section, pattern_address).
+          pattern: If a byte pattern is provided, the patch is only applied  
+              if the pattern is found.
+              Default is None.
+          create_stub: Flag to automatically create an off page call if 
+              necessary.
+              Default is True.
+        """
         self._patch_dict[name] = {"function": function, "pattern": pattern,
             "create_stub":create_stub}
     
     def _generate_patch_dict(self):
+        """Generate internal dictionary containing all available patches."""
         self._add_patch("_HandleControlRequest", 
             self._patch_HandleControlRequest, 
             patterns.CONTROL_REQUEST_HANDLER, False)
@@ -234,7 +349,18 @@ class Firmware(object):
     
     def _patch_HandleControlRequest(self, patch_section, patch_address,
             pattern_section, pattern_address):
-        # hook into control request handling
+        """Patch to hook into control request handling.
+        
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         call_address = self._get_word(pattern_section, pattern_address+1)
         self._set_word(pattern_section, call_address+1, patch_address)
         if patch_section != 0:
@@ -244,8 +370,21 @@ class Firmware(object):
     
     def _patch_EndpointInterrupt(self, patch_section, patch_address,
             pattern_section, pattern_address):
-        # replace the EP interrupt vector, handling all incoming and 
-        # outgoing non-control data
+        """Patch to replace the EP interrupt vector.
+        
+        The EP interrupt vector handles all incoming and outgoing non-control 
+        data.
+        
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         # we diverge from Psychson, since it would allow for multiple 
         # sections to contain endpoint interrupt handlers but that doesn't
         # seem to be useful
@@ -256,6 +395,18 @@ class Firmware(object):
     
     def _patch_HandleEndpointInterrupt(self, patch_section, patch_address,
             pattern_section, pattern_address):
+        """Patch the Endpoint Interrupt handler.
+        
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         sect = self._sections[pattern_section]
         sect.set_sequence(pattern_address, (0x60, 0x0B, 0x00))
         sect.set_word(pattern_address+4, patch_address)
@@ -263,7 +414,18 @@ class Firmware(object):
     
     def _patch_HandleCDB(self, patch_section, patch_address,
             pattern_section, pattern_address):
-        # CDB handling code
+        """Patch for the CDB handling code.
+        
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         #TODO: do we assume, that pattern_section==0?
         sect = self._sections[0]
         sect.set_byte(pattern_address, 0x02)
@@ -271,8 +433,18 @@ class Firmware(object):
     
     def _patch_LoopDo(self, patch_section, patch_address,
             pattern_section, pattern_address):
-        # add own code to infinite loop
+        """Add own code to infinite loop.
         
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         #TODO: do we assume, that pattern_section==0?
         # at this point Psychson uses pattern_section together with the 
         # last free chunk of Base; 
@@ -290,7 +462,18 @@ class Firmware(object):
     
     def _patch_PasswordReceived(self, patch_section, patch_address,
             pattern_section, pattern_address):
-        # apply password patch code
+        """Patch password handling code.
+        
+        Args:
+          patch_section: Index of the section that contains the patch code.
+          patch_address: Address of the patch code in the section. Or address
+              of the off page call in the base section, if an off page call was
+              created.
+          pattern_section: Index of the section, that contains the associated
+              byte pattern. Or None if no byte pattern was provided.
+          pattern_address: Address of the associated byte pattern in the 
+              section. Or None if no byte pattern was provided.
+        """
         sect = self._sections[pattern_section]
         pattern_address += 0x24
         
@@ -307,6 +490,14 @@ class Firmware(object):
         
     
     def apply_patches(self, code_dict, rst_dict):
+        """Apply patches.
+        
+        Args:
+          code_dict: Dictionary mapping the indices of sections to names of
+              binary files containing code.
+          rst_dict: Dictionary mapping the indices of sections to names of
+              rst files containing the label and addresses of code.
+        """
         # read rst files
         maps = {}
         for section_index, filename in rst_dict.items():
@@ -346,7 +537,21 @@ class Firmware(object):
                     
 
 class Section(object):
+    """Represent one section of firmware binary."""
+    
     def __init__(self, length, data_source=None):
+        """Initiate section object.
+        
+        Args:
+          length: Amount of data the section can store in bytes.
+          data_source: Should provide a read function to read in the initial 
+              data of the section.
+              Default is None.
+        
+        Raises:
+          IOError: If data_source was not able to provide the whole initial 
+              data.
+        """
         if data_source is None:
             self._data = bytearray(length)
             self._last_free = 0
@@ -361,6 +566,14 @@ class Section(object):
             self._last_free = self._find_last_free_chunk()
     
     def _find_last_free_chunk(self):
+        """Search for last free chunk.
+        
+        Last free chunk is expected to contain a repeating byte value 
+        (not necessary 0x00).
+        
+        Returns:
+          Address of the first byte of the last free chunk.
+        """
         ret = -1
         
         repeating = self._data[-1]
@@ -374,66 +587,154 @@ class Section(object):
         return ret + 1
     
     def get_last_free(self):
+        """Get last free chunk.
+        
+        Returns:
+          Address of the first byte of the last free chunk.
+        """
         return self._last_free
     
-    # update last free by passing (the highest) address written to
     def _update_last_free(self, written_to):
+        """Update the last free chunk.
+        
+        Args:
+          written_to: Highest address that was written.
+        """
         if written_to >= self._last_free:
             self._last_free = written_to + 1
     
-    # reads word (big endian)
     def get_word(self, offset):
+        """Read word big endian.
+        
+        Args:
+          offset: Address of the word in the section.
+        
+        Returns:
+          Value of the word.
+        """
         value = self._data[offset] << 8
         value += self._data[offset+1]
         return value
     
     def set_byte(self, offset, value):
+        """Write byte.
+        
+        Args:
+          offset: Address of the byte in the section.
+          value: Value of the byte
+        """
         self._data[offset] = value
         self._update_last_free(offset)
     
-    # writes word (big endian)
     def set_word(self, offset, value):
+        """Write word big endian.
+        
+        Args:
+          offset: Address of the word in the section.
+          value: Value of the word.
+        """
         self._data[offset] = (value >> 8) & 0xFF
         self._data[offset+1] = value & 0xFF
         self._update_last_free(offset+1)
     
     def set_sequence(self, offset, values):
+        """Write sequence of byte values.
+        
+        Args:
+          offset: Address of the first byte.
+          values: Sequence of byte values.
+        """
         for i in xrange(len(values)):
             self._data[offset+i] = values[i]
         self._update_last_free(offset+len(values)-1)
         
     def append(self, value):
+        """Append byte to the end.
+        
+        Args:
+          value: Value of the byte.
+        """
         self.set_byte(self._last_free, value)
     
     def extend(self, values):
+        """Append sequence of bytes to the end.
+        
+        Args:
+          values: Sequence of byte values.
+        """
         self.set_sequence(self._last_free, values)
     
     def append_word(self, value):
+        """Append word to the end.
+        
+        Args:
+          value: Value of the word
+        """
         self.set_word(self._last_free, value)
     
     def write_to_file(self, output_file):
+        """Write section data to file object.
+        
+        Args:
+          output_file: File object.
+        """
         output_file.write(self._data)
     
     def search(self, regex, offset):
+        """Search for a regular expression in the section data.
+        
+        Args:
+          regex: Regular expression to be applied.
+          offset: Start search at this offset.
+        
+        Returns:
+          Result of search.
+        """
         return regex.search(self._data, offset)
     
     def get_all(self):
+        """Get copy of all data.
+        
+        Returns:
+          Copy of the section data.
+        """
         return bytearray(self._data)
     
-# only with sections
 def save_if_not_none(sec, filename):
+    """Write section to file.
+    
+    Args:
+      sec: Section object or None.
+      filename: Name of the file.
+    """
     if sec is not None:
         with open(filename, "wb") as data_file:
             sec.write_to_file(data_file)
 
 
 def check_firmware_image(filename):
+    """Check if a file contains a supported firmware image.
+    
+    Args:
+      filename: File containing the firmware binary.
+    
+    Returns:
+      True if the file contains a support firmware image, else False.
+    """
     md5 = hashlib.md5()
     with open(filename, "rb") as firmware_file:
         md5.update(firmware_file.read())
     return md5.hexdigest() in VERIFIED
 
 def get_address_map(filename):
+    """Extract address map from rst file.
+    
+    Args:
+      filename: Name of the rst file.
+    
+    Returns:
+      Dictionary mapping code labels to addresses.
+    """
     regex = re.compile(
         r"^\s*(?P<address>[0-9a-fA-F]+)\s+(\S+\s+)*(?P<label>_\S*):$")
     address_map = {}
@@ -445,11 +746,25 @@ def get_address_map(filename):
     
     return address_map
 
-# search inner dictionaries that are value of an outer dictionary for a certain inner key
-# and return the outer key and the inner value for the or None
-# e.g. d={0:{"a":23}, 4:{"b":24, "gwr":2}}
-# find_key_in_dict_dict(d, "b") returns (4, 24)
 def find_in_inner_dict(outer_dict, inner_key):
+    """Search dictionaries with dictionaries as values.
+    
+    Search inner dictionaries that are value of an outer dictionary for a 
+    certain inner key and return the outer key and the inner value 
+    for the match.
+    
+    E.g. 
+    d={0:{"a":23}, 4:{"b":24, "gwr":2}}
+    find_key_in_dict_dict(d, "b") returns (4, 24)
+    
+    Args:
+      outer_dict: Dictionary with dictionaries as values.
+      inner_key: Wanted key of the inner dictionaries.
+    
+    Returns:
+      Tuple (outer key, inner value) if the inner key was found. 
+      (None, None) if the inner key was no found.
+    """
     for outer_key, inner_dict in outer_dict.items():
         if inner_key in inner_dict:
             return (outer_key, inner_dict[inner_key])

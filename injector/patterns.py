@@ -1,5 +1,6 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
+"""Provide code patterns used to identify points of interest."""
 
 BMREQUESTTYPE = (
     0x90, 0xF0, 0xB8, 0xE0, # mov DPTR, #0xF0B8 \ movx a, @DPTR

@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""Command line interface for injector."""
+
 from firmware import Firmware, check_firmware_image
 import logging
 import argparse
@@ -33,10 +38,10 @@ if __name__ == '__main__':
         help="file containing label->address mapping for the base section")
     for i in xrange(16):
         parser.add_argument("--%icode"%i, 
-            help="file containing code to be added to %i (%X) section" % (i,i))
+            help="file containing code to be added to %i (%X) section" % (i, i))
         parser.add_argument("--%irst"%i, 
             help="file containing label->address mapping for the %i. (%X) "
-            "section" % (i,i))
+            "section" % (i, i))
     
     args = parser.parse_args()
     
