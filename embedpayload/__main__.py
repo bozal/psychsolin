@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""Commandline interface for embedding payload."""
+
 import logging
 import argparse
 from embedpayload import embed_payload

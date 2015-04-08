@@ -1,10 +1,18 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
+"""Provide functions to embed payload in firmware binary."""
 
 import re
 import logging
 
 def embed_payload(payload_filename, firmware_filename):
+    """Embed payload in firmware binary.
+    
+    Args:
+      payload_filename: Name of the file containing the payload.
+      firmware_filename: Name of the file containing the firmware binary.
+    
+    """
     with open(firmware_filename, "r+b") as firmware_file:
         # skip header
         firmware_file.seek(0x200)
