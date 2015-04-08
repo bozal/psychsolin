@@ -1,14 +1,37 @@
 # -*- coding: utf-8 -*-
 
+"""Providing functions to execute SCSI commands."""
+
 import subprocess
 import logging
 import re
 
 class SCSIException(Exception):
+    """Exception concerning a SCSI command."""
     pass
 
 # WARNING:vulnerable to shell command injection via device 
 def execute_scsi_command(device, cmd, data_out=None, len_in=0):
+    """Execute single SCSI command on Linux device.
+    
+    WARNING: This function is vulnerable to shell command injection 
+    through the device parameter. Always validate the device before calling.
+    
+    Args:
+      device: String containing path to device.
+      cmd: SCSI command as sequence of byte values.
+      data_out: Data to be sent by SCSI command as sequence of byte values.
+          None if no data is to be sent.
+          Default is None.
+      len_in: Size of the expected response in bytes.
+          Default is 0.
+    
+    Returns:
+      Bytearray containing the response data.
+    
+    Raises:
+      SCSIException: Error during execution of the SCSI command.
+    """
     args = ["sg_raw", "-b"]
     
     if data_out is not None:
@@ -44,5 +67,16 @@ def execute_scsi_command(device, cmd, data_out=None, len_in=0):
     return bytearray(data_in)
     
 def verify_device_path(device_path):
+    """Verify that a string contains the path to a (Linux) device.
+    
+    The path is only verified formally. It's not checked if the device really 
+    exists.
+    
+    Args:
+      device_path: String to be checked.
+    
+    Returns:
+      True if the string contains a path to a (Linux) device.
+    """
     res = re.match(r"^/dev/sd\w/?$", device_path)
     return res is not None

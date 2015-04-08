@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""Commandline interface for interacting with a Phison USB device."""
+
 import logging
 import argparse
 import sys

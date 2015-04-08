@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
 
+"""Provide standard and vendor specific SCSI commands.
+
+Every command is a tuple (command, expected response length).
+Commands that contain fileds that are typically altered during use
+(e.g. read commands need to specify an address) are presented as a list of byte 
+values. Other commands are presented as an immutable sequence of byte values.
+"""
+
 # static commands are tuples
 # commands with variables are lists
 # format: (CMD, EXPECTED_RETURN_LENGTH)
